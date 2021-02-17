@@ -1,0 +1,261 @@
+Overview
+--------
+
+This project attempts to aid debugging ruby through unifying debug.rb, inf-ruby and emacs.
+
+The standard debugger (debug.rb), that can be invoked by “require ‘debug.rb’”,is useful for setting breakpoints, stepping through code, setting and changing variables.  But it isn’t easy to add or change code.  Inf-ruby is an emacs interface to irb, which is great for typing  in and testing ruby code, defining or redefining methods, but has no ability to single step or add breakpoints.
+
+Rdb attempts to combine both debug.rb and irb (inf-ruby) within an emacs environment. As well as the emacs (lisp) code there is some ruby code.  This enhances debug.rb with conditional breakpoints and breakpoint commands (a ruby commands that is run when a breakpoint is encountered) and allows emacs to display the file and line when the debugger is reentered and when traversing frames (the “up” and “down” commands).
+
+Rdb can be used in 2 ways:
+- using inf-ruby to create a ruby process (such as irb)
+- when the standard debugger is entered from a ruby program, it adds a REPL environment
+In both cases emacs interfaces to the debugger are added.
+
+The `rdb’ command does the following:
+
+1. Finds or creates a ruby process to communicate with:
+
+(a) If the current buffer is in not in comint mode (e.g. a shell buffer) with a running process, then inf-ruby is invoked.
+
+(b) If the current buffer is in comint mode with a running process, then unless the process has stopped at the rdb prompt an error is raised.  Assuming it is stopped in the debugger, the major mode is saved before switching to inf-ruby mode.
+
+In either case, the buffer is now in inf-ruby-mode.
+
+2. The directory specified by variable rdb-ruby-dir is then added to the load path of the ruby process if it is not already there.
+
+3. Some ruby code is loaded (by sending a “require” command to the ruby process).  This extends the features of the debugger, as explained below. 
+
+4. Some entries are added to the inf-ruby menu (provided by inf-ruby).
+
+5. If the buffer was originally not in comint mode (case 1b), then step 4 may leave it in the debugger and a number of “c” (continue) commands are needed to get back to the inf-prompt.  This is done automatically if variable rdb-try-and-return-from-debugger is non- nil.
+
+6. For case 1b, if the ruby-process terminates, the buffer is restored to its previous mode (typically shell-mode).
+
+
+Emacs Support
+-------------
+Documentation for inf-ruby suggests adding to your ~/.emacs file
+	(add-hook 'ruby-mode-hook 'inf-ruby-minor-mode)
+Rdb assumes that is done.  It means that for emacs buffers in ruby mode (i.e. showing ruby code) and extra menu-bar item "Inf-ruby" is available.  This provides a number of useful features, such as "Send definition" (send the method surrounding point to the inf-ruby process).
+
+Rdb adds to this menu several extra items:
+
+Add breakpoint here
+Add condition here
+Add command here
+Remove breakpoint here
+List breakpoints
+Record missing breakpoints
+Reposition breakpoints
+Delete all breakpoints
+
+“Add breakpoint here” runs rdb-add-breakpoint.   When called interactively add a breakpoint at the given file and line where point is unless there is one already there.  When called from a program the file and line may be specified.  
+
+“Remove breakpoint here” runs rdb-remove-breakpoint.  When called interactively remove a breakpoint at the given file and line where point is unless there is one already there. When called from a program the file and line may be specified.  If there is more than one breakpoint there only the first is removed.
+
+“Add condition here” runs rdb-add-condition;  “Add command here” runs rdb-add-command.
+If there is no breakpoint at the line containing point one is added.   Then a condition or command is prompted for.  The default value is the previous condition or command if there is one.  Breakpoint conditions and commands are described below.
+
+“List breakpoints” runs rdb-list-breakpoints.  This lists the breakpoints and any conditions or commands attached to them.
+
+“Reposition breakpoints” runs “rdb-reposition-breakpoints”.  Rdb keeps track in an alist of breakpoints it has added or removed.  Instead of recording the actual line number, a marker is used.  Editing the file may change the line number, but the marker remains attached to the line.  The command rdb-reposition-breakpoints replaces all the breakpoints recalculating the line number from the marker.
+
+Another use for “rdb-reposition-breakpoints” is when the ruby process has terminated and is to be re-created.  The command allows the previous breakpoints to easily be put back.
+
+Any breakpoints put in manually, using the debugger’s `b’ command, are not recorded in this alist.  The “rdb-record-missing-breakpoints” command can be used to add them.
+
+The command “rdb-save-brkpts-to-buffer” saves the breakpoints (from the alist) in buffer “*Brkpts*”.  This buffer may be saved in a file to make breakpoints (and their conditions and commands) persist accross editing sessions.
+
+
+
+
+
+Ruby code
+---------
+Rdb provides an extended interface to the debugger,  available at the irb prompt level and through emacs commands.
+
+Breakpoints are specified by their breakpoint number which is 1 based.
+
+There are various commands provided by debug-extra:
+
+rdb_bk_num(file, line, create=true) -> number or nil
+If there is a breakpoint at line LINE of file FILE then return its breakpoint number (one based).
+If not, then create one and return its number unless argument CREATE is false in which case return nil.
+
+rdb_bk_rem(number)
+Remove a breakpoint specified by its breakpoint number.
+
+rdb_bk_list
+List the breakpoints, and their condition or command if appropriate
+The return value is the number of active breakpoints.
+
+rdb_bk_set_condition(number, condition=nil)
+Add a condition to a breakpoint.  If condition is nil then remove the condition.
+
+rdb_bk_condition(number) -> string
+Return the condition for the breakpoint.  If there is no condition return an empty string.
+
+rdb_bk_command(number, command)
+Add a command to a breakpoint.  If condition is nil then remove the condition.
+
+rdb_bk_command(number) -> string or nil
+Return the command for the breakpoint.  If there is no command return nil
+
+rdb_zap_breakpoints
+Completely remove all breakpoints.  The next breakpoint added will be number 1.
+
+rdb_bk_reposition(num, file, line, condition=nil, command=nil)
+First ensure that breakpoints 1..num-1 exist, by creating a dummy (deleted) one.
+Create breakpoint NUM if necessary.  Change all preceding values (file, line etc) to the arguments provided.
+
+
+Some of the above functions duplicate existing functions available when at the debugger prompt.  However, these above functions are valid when at either prompt (because the debugger treats any unknown command as an evaluate).  The rdb_bk_list differs from the debugger’s “b” command in that it lists breakpoint conditions and commands if set.
+
+
+Breakpoint conditions
+---------------------
+A breakpoint condition is a string containing ruby code.  When the breakpoint is hit, this condition is evaluated, and if the result is false then the debugger continues.  When entering this string with emacs do not quote the string, because emacs adds a single quote around the string it receives (and doubles any single quote found) when sending it to the process.
+
+For example, to have the breakpoint active only when n exceeds 10 simply enter n>10 when prompted for the condition.
+
+The list breakpoint command would show
+Breakpoint 3 conditional upon n>10
+
+To use the ruby code directly the condition must be quoted, e.g.
+irb(main):024:0> rdb_bk_condition(3, "n>10")
+
+
+Breakpoints can be “disabled” by giving the condition “false”.   They can be enabled by removing the condition.
+
+
+Breakpoint commands
+-------------------
+If a breakpoint command is given, that command is run every time the breakpoint is hit before the debugger prompt is shown.
+
+Note: a breakpoint command is a ruby expression that is executed by the debugger in the context of the location of the breakpoint.  You cannot enter a debugger command such as c.
+
+When entering a command with the emacs command simply enter the command without outer quotes,  but when entering the command from ruby the argument must be a string.
+
+For example, using the ruby method directly
+
+irb(main):072:0> rdb_bk_command(4, 'puts "i=#{i}"')
+Breakpoint 4 now runs command puts "i=#{i}"
+
+but with the add-command at the enter command prompt simply enter: puts "i=#{i}"
+
+Emacs adds a single quote around the string it receives (and doubles any single quote found).
+
+
+
+It is possible to have both a condition and a command for a breakpoint.  When the breakpoint is hit, if the condition is true the command is run.
+
+irb(main):085:0> rdb_bk_list
+  3	/Users/richard/rubystuff/test/junk3.rb:19
+  4	/Users/richard/rubystuff/test/junk3.rb:8	if i > 8
+  Runs:	puts "i=#{i}"
+=> 2
+irb(main):086:0>
+
+
+Aliases
+-------
+While the commands are reasonably short they are cumbersome to type.  Adding aliases is an easy way of giving shorter names.  For example:
+
+alias ba rdb_bk_num
+alias br rdb_bk_remove
+alias bl rdb_bk_list
+alias bcond rdb_bk_set_condition
+alias bcomm rdb_bk_set_command
+
+You can put this in a buffer then use the command “rdb-send-buffer” to send the entire buffer to the active rdb process.
+
+Example assuming the above aliases:
+
+irb(main):108:0> bcond 3, "i%2 == 0"
+Breakpoint 3 conditional upon i%2 == 0
+=> nil
+irb(main):109:0> bl
+  3	/Users/richard/rubystuff/test/junk3.rb:19	if i%2 == 0
+  4	/Users/richard/rubystuff/test/junk3.rb:8	if i > 8
+  Runs:	puts "i=#{i}"
+=> 2
+irb(main):110:0> 
+
+
+
+Breakpoint Repositioning
+------------------------
+
+Suppose the are several breakpoints in a file, the file is edited, then it or part of it is sent to the process using send-definition or send-region for example.  Some of the desired breakpoints may now have different line numbers.
+
+If the breakpoints were set with emacs commands (such as rdb-add-breakpoint, as opposed to the debugger’s `b’ command, then markers were set in the file where point was when the breakpoint was added, and an alist associates the marker with each breakpoint number.  The command “rdb-reposition-breakpoints” iterates thought this alist and resets all the breakpoints to their new line numbers.
+
+Caution:  You may be tempted to run “rdb-reposition-breakpoints” after saving a file.  Remember, though, that the ruby debugger doesn’t “see” the current contents of the file; its knowledge of the line number is hasn’t changed.  When re-evaluating code through commands like “ruby-send-definition” or “ruby-send-region” would be a suitable time to run “rdb-reposition-breakpoints”.
+
+Another use for rdb-reposition-breakpoints is when the ruby process has unexpected terminated.  The breakpoints can be restored (in the same buffer) with this command.  If a new buffer is used (because inf-ruby hasn’t been changed) then you can run “rdb-save-brkpts-to-buffer” in the old buffer,  then use “rdb
+
+
+
+
+Support for multiple rdb buffers (multiple ruby processes)
+---------------------------------------------------------
+(As of writing, this requires a change to inf-ruby;  see below.)
+
+Rdb supports having multiple buffers in inf-ruby-mode.  Variable `rdb-active-buffer’, an alias to `inf-ruby-buffer’, is set to whichever rdb buffer was used last.  This is used by the rdb-xxx emacs commands, as well as inf-ruby commands such as ruby-send-definition.  For a visual indication of which rdb buffer is active,  the active buffer’s mode-name in the mode-line has an ‘*’ appended.
+
+With the patch to inf-ruby, described below, the command “inf-ruby” always uses the buffer called *ruby*.  To create a second inf-ruby process rename the first buffer, to say *ruby1*, before reissuing the “inf-ruby” command.
+
+
+The rdb-hook
+------------
+Hook functions may be attached to “rdb-hook” which is run at the end of rdb.
+For example:
+
+(defun my-rdb-hook-func ()
+  (local-set-key "\C-x\C-a\C-o" 'rdb-show-this-location)
+  (local-set-key "\C-x\C-a\C-a" 'rdb-list-breakpoints))
+
+(add-hook 'rdb-hook 'my-rdb-hook-func)
+
+These allow the commands to be run in the ruby process buffer.  (They are already available in the inf-ruby buffers.)
+
+
+
+The files
+---------
+
+[A] Emacs files
+
+* rdb.el is the emacs lisp code.  Running M-x rdb sends a "require 'debug'" command to the ruby process.
+
+* You need to have inf-ruby.el, available from
+  https://github.com/nonsequitur/inf-ruby/blob/master/inf-ruby.el
+
+* Currently, with that version, if the ruby process terminates and a new one started it is created in a new buffer.  The downsides of that are:
+(a) the command history is lost
+(b) breakpoints cannot simply be repositioned, because the alist is buffer local.
+To get around that, either apply the patch in file 
+   Patch-inf-ruby.txt
+or use my copy of it available here:
+   https://github.com/sharmanr/inf-ruby.git
+With this, if the ruby process dies, when rdb calls inf-ruby the new process will re-use the same buffer.  The rdb-reposition-breakpoints command can be used to put back the breakpoints.
+
+
+[B] Ruby files
+
+* debug-extra.rb contains the bulk of the ruby code.  This code contains only stand-alone ruby methods;  it does not change the built-in debug.rb code.  However, at the bottom are two additional “require” statements for the following files.  These change or enhance debug.rb, so comment out these require statements if you do not wish to change code in debug.rb.
+
+Set variable `rdb-ruby-dir’ to the directory containing these files if this directory is not on ruby’s $LOAD_PATH.
+
+* enhanced-breakpoints.rb changes two methods in Debug.rb:
+Methods “check_break_points” and “trace_func” are modified to provide breakpoint conditions and commands.
+
+* debug-format-frame.rb changes method “format_frame”:
+When called within emacs (as determined by environment variable EMACS being set) the location when entering the debugger or when going “up” and “down” a frame the file and line are output in the format used by gdb; this is used by emacs to display that location in the other window (unless rdb-show-file-and-line-info is nil).
+
+Not including enhanced-breakpoints means that breakpoint conditions and commands are not available;
+not including debug-format-frame means emacs will not display the current location.  Other than that, the remaining features will work.
+
+
+All feedback is welcome. Please let me know of problems, suggestions, whatever.
